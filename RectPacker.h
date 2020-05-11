@@ -8,7 +8,7 @@
 // first iteration, more tests and optimizations
 // can be made in the future.
 
-#define RECTPACKER_INCLUDE_TEST
+//#define RECTPACKER_INCLUDE_TEST
 
 #ifdef RECTPACKER_INCLUDE_TEST
 #include <random>
@@ -132,10 +132,14 @@ public:
 	/// <param name="width">Width of generated packer</param>
 	/// <param name="height">Height of generated packer</param>
 	/// <param name="iterations">Number of times to test</param>
-	static void Test(int width, int height, int iterations)
+	/// <param name="seed">Seed for random number generator</param>
+	/// <param name="printResult">
+	/// Print the state of the bounding box, at first fail
+	/// </param>
+	static void Test(int width, int height, int iterations, unsigned int seed, bool printResult = false)
 	{
-		std::default_random_engine engine(844);
-		std::uniform_int_distribution genWidth(1, width / 2), genHeight(1, height / 2);
+		std::default_random_engine engine(seed);
+		std::uniform_int_distribution<int> genWidth(1, width / 2), genHeight(1, height / 2);
 
 		float totalPacks = 0;
 		float totalOccupancy = 0;
@@ -161,6 +165,7 @@ public:
 				totalPacks++;
 			}
 
+			if (!printResult) continue;
 			std::cout << "Result: " << std::endl;
 			test.Print(true);
 		}
@@ -196,6 +201,12 @@ private:
 	using BoundingBoxIt = std::vector<BoundingBox>::iterator;
 	using Fit = std::tuple<BoundingBoxIt, size_t, bool, bool>;
 
+	int Clamp(int v, int low, int high)
+	{
+		assert(high > low);
+		return (v < low) ? low : (high < v) ? high : v;
+	}
+
 	Transform GetTransform(BoundingBoxIt it, int width, int height, bool rotated)
 	{
 		size_t index = std::distance(m_BoundingBoxes.begin(), it);
@@ -225,7 +236,7 @@ private:
 		if (left && (index % m_Columns != 0))
 			exposed += (box - 1)->Filled ? 0 : test.Height;
 
-		if (top && (index - m_Columns > 0))
+		if (top && (index - m_Columns) > 0)
 			exposed += (box - m_Columns)->Filled ? 0 : test.Width;
 
 		if (right)
@@ -266,8 +277,8 @@ private:
 			{
 				BoundingBox diff =
 				{
-					std::clamp((w + lastBox->Width) - width, 0, lastBox->Width),
-					std::clamp((combined.Height + lastBox->Height) - height, 0, lastBox->Height)
+					Clamp((w + lastBox->Width) - width, 0, lastBox->Width),
+					Clamp((combined.Height + lastBox->Height) - height, 0, lastBox->Height)
 				};
 
 				exposed += GetExposedSurfaceArea(
@@ -327,7 +338,7 @@ private:
 		size_t index = std::distance(m_BoundingBoxes.begin(), box);
 		int originRow = index / m_Columns;
 
-		auto GetCombined = [&](bool fill) -> std::pair<BoundingBox, BoundingBoxIt>
+		auto VisitCombined = [&](bool fill) -> std::pair<BoundingBox, BoundingBoxIt>
 		{
 			auto lastBox = box;
 			BoundingBox combined = { 0, 0, true };
@@ -353,14 +364,14 @@ private:
 			return { combined, lastBox };
 		};
 
-		auto data = GetCombined(false);
+		auto data = VisitCombined(false);
 		int columnsBefore = m_Columns;
 		Segment(data.second, { data.first.Width - width, data.first.Height - height });
 
 		// Find origin box
 		box = m_BoundingBoxes.begin() + index;
 		box += columnsBefore == m_Columns ? 0 : originRow;
-		data = GetCombined(true);
+		data = VisitCombined(true);
 
 		return GetTransform(box, data.first.Width, data.first.Height, rotated);
 	}
@@ -373,34 +384,34 @@ private:
 		if (after.Width == 0 && after.Height == 0) return;
 
 		size_t index = std::distance(m_BoundingBoxes.begin(), box);
-		int originRow = (index / m_Columns) + 1;
+		int originRow = index / m_Columns;
 		if (after.Width) // Create new column
 		{
-			int row = 0;
 			auto emplace = m_BoundingBoxes.begin() + (index % m_Columns++) + 1;
-			while (true)
+			for(int row = 0;;)
 			{
-				auto before = emplace - 1;
+				BoundingBoxIt before = emplace - 1;
 				before->Width -= after.Width;
+
 				emplace = m_BoundingBoxes.emplace(emplace, after.Width, before->Height, before->Filled);
 				if (++row == m_Rows) break;
-				if (row < originRow) index++;
 				emplace += m_Columns;
 			}
 
+			index += originRow;
 			box = m_BoundingBoxes.begin() + index;
 		}
 
 		if (after.Height) // Create new row
 		{
 			m_Rows++;
-			auto insert = m_BoundingBoxes.begin() + (originRow * m_Columns);
+			auto insert = m_BoundingBoxes.begin() + ((originRow + 1) * m_Columns);
 			insert = m_BoundingBoxes.insert(insert, m_Columns, { 0, 0, false });
 
 			box = m_BoundingBoxes.begin() + index;
 			if (insert < box) box += m_Columns;
 
-			for (size_t i = 0; i < m_Columns; i++, insert++)
+			for (int i = 0; i < m_Columns; ++i, ++insert)
 			{
 				auto above = insert - m_Columns;
 				above->Height -= after.Height;
